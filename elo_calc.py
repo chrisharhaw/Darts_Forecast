@@ -22,14 +22,6 @@ class DartsELOCalculator:
         self.player_elos = {}  # Current ELO ratings
         self.elo_history = []  # Historical ELO data
         self._player_games = {}  # Track games efficiently
-    
-    # def get_k_factor(self, event_name: str, is_final: bool = False) -> int:
-    #     """Determine K-factor based on tournament importance and stage."""
-    #     k = self.k_factor_major if self.is_major_tournament(event_name) else self.k_factor
-    #     # Increase K-factor for finals
-    #     if is_final and 'final' in event_name.lower():
-    #         k = int(k * 1.5)
-    #     return k
 
     def get_k_factor(self, player_name: str = "") -> int:
         """Determine K-factor for a player.
@@ -60,50 +52,6 @@ class DartsELOCalculator:
     def calculate_expected_score(self, elo_a: int, elo_b: int) -> float:
         """Calculate expected score for player A against player B."""
         return 1 / (1 + 10 ** ((elo_b - elo_a) / 400))
-    
-    # def update_elo(self, winner: str, loser: str, event_name: str, 
-    #                round_name: str, date: str, score: Tuple[int, int]) -> None:
-    #     """Update ELO ratings after a match."""
-
-    #     # Get current ELOs
-    #     winner_elo = self.get_player_elo(winner)
-    #     loser_elo = self.get_player_elo(loser)
-        
-    #     # # Determine if this is a final
-    #     # is_final = 'final' in round_name.lower() if round_name else False
-        
-    #     # # Get appropriate K-factor
-    #     # k = self.get_k_factor()
-    #     k_winner = self.get_k_factor(winner)
-    #     k_loser = self.get_k_factor(loser)
-        
-    #     # Calculate expected scores
-    #     expected_winner = self.calculate_expected_score(winner_elo, loser_elo)
-    #     expected_loser = self.calculate_expected_score(loser_elo, winner_elo)
-        
-    #     # Update ELOs (winner gets 1 point, loser gets 0)
-    #     winner_new_elo = winner_elo + k_winner * (1 - expected_winner)
-    #     loser_new_elo = loser_elo + k_loser * (0 - expected_loser)
-        
-    #     # Store historical data
-    #     self.elo_history.append({
-    #         'date': date,
-    #         'event': event_name,
-    #         'round': round_name,
-    #         'player1': winner,
-    #         'player2': loser,
-    #         'score': f"{score[0]}-{score[1]}",
-    #         'winner': winner,
-    #         'player1_elo_before': winner_elo,
-    #         'player2_elo_before': loser_elo,
-    #         'player1_elo_after': winner_new_elo,
-    #         'player2_elo_after': loser_new_elo
-    #         # 'k_factor': k
-    #     })
-        
-    #     # Update current ELOs
-    #     self.player_elos[winner] = winner_new_elo
-    #     self.player_elos[loser] = loser_new_elo
 
     def update_elo(self, winner: str, loser: str, event_name: str, 
                round_name: str, date: str, score: Tuple[int, int]) -> None:
@@ -145,34 +93,44 @@ class DartsELOCalculator:
         self._player_games[loser] = loser_games + 1
 
     def process_matches(self, matches_df: pd.DataFrame) -> None:
-        """Process all matches in chronological order."""
-        # Ensure dates are sorted
+        """OPTIMIZED VERSION: Pre-filter and use faster iteration."""
+        # Pre-process and filter once
         matches_df = matches_df.copy()
         matches_df['EventDate'] = pd.to_datetime(matches_df['EventDate'], errors='coerce')
         matches_df = matches_df.sort_values('EventDate')
         
-        for _, match in matches_df.iterrows():
-            if (match['Winner'] and match['Winner'] != 'draw' and 
-                match['Player1'] and match['Player2'] and
-                pd.notna(match['Player1Score']) and pd.notna(match['Player2Score'])):
-                
-                if match['Winner'] == match['Player1']:
-                    winner = match['Player1']
-                    loser = match['Player2']
-                    score = (match['Player1Score'], match['Player2Score'])
-                else:
-                    winner = match['Player2']
-                    loser = match['Player1']
-                    score = (match['Player2Score'], match['Player1Score'])
-                
-                self.update_elo(
-                    winner=winner,
-                    loser=loser,
-                    event_name=match['Event'],
-                    round_name=match['Round'],
-                    date=match['EventDate'].strftime('%Y-%m-%d'),
-                    score=score,
-                )
+        # Filter valid matches once (this removes the if-check from the inner loop)
+        valid_matches = matches_df[
+            (matches_df['Winner'].notna()) & 
+            (matches_df['Winner'] != 'draw') &
+            (matches_df['Player1'].notna()) & 
+            (matches_df['Player2'].notna()) &
+            (matches_df['Player1Score'].notna()) & 
+            (matches_df['Player2Score'].notna())
+        ].copy()
+        
+        print(f"Processing {len(valid_matches)} valid matches...")
+        
+        # Use iterrows but with progress indication
+        total_matches = len(valid_matches)
+        for _, match in valid_matches.iterrows():
+            # if idx % 5000 == 0:  # Progress indicator
+            #     print(f"  Processed {idx}/{total_matches} matches...")
+            
+            if match['Winner'] == match['Player1']:
+                winner = match['Player1']
+                loser = match['Player2']
+                score = (match['Player1Score'], match['Player2Score'])
+            else:
+                winner = match['Player2']
+                loser = match['Player1']
+                score = (match['Player2Score'], match['Player1Score'])
+            
+            self.update_elo(
+                winner=winner, loser=loser,
+                event_name=match['Event'], round_name=match['Round'],
+                date=match['EventDate'].strftime('%Y-%m-%d'), score=score
+            )
     
     def get_elo_history_df(self) -> pd.DataFrame:
         """Get historical ELO data as DataFrame."""
@@ -245,15 +203,6 @@ def load_all_match_data(csv_directory: str = '/Users/christopherharvey-hawes/Doc
     
     print(f"Loaded {len(combined_df)} total matches")
     return combined_df
-
-# def __get_games_played(matches_df: pd.DataFrame, player_name: str, current_date) -> int:
-#     """Calculate total games played by a player before a match."""
-#     event_date = current_date
-#     date_filtered = matches_df[matches_df['EventDate'] < event_date]
-#     player_matches = date_filtered[
-#         (date_filtered['Player1'] == player_name) | (date_filtered['Player2'] == player_name)
-#     ]
-#     return len(player_matches)
 
 def verify_chronological_order(matches_df: pd.DataFrame) -> bool:
     """Verify that matches are in proper chronological order."""
