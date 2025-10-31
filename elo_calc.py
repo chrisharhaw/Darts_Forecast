@@ -5,6 +5,7 @@ from datetime import datetime
 import os
 import glob
 from typing import Dict, List, Tuple, Optional
+from tqdm import tqdm 
 
 class DartsELOCalculator:
     def __init__(self, initial_elo: int = 1500, k_factor: int = 24, k_factor_major: int = 40):
@@ -99,16 +100,7 @@ class DartsELOCalculator:
         matches_df['EventDate'] = pd.to_datetime(matches_df['EventDate'], errors='coerce')
         matches_df = matches_df.sort_values('EventDate')
         
-        # Filter valid matches once (this removes the if-check from the inner loop)
-        valid_matches = matches_df[
-            (matches_df['Winner'].notna()) & 
-            (matches_df['Winner'] != 'draw') &
-            (matches_df['Player1'].notna()) & 
-            (matches_df['Player2'].notna()) &
-            (matches_df['Player1Score'].notna()) & 
-            (matches_df['Player2Score'].notna())
-        ].copy()
-        
+        valid_matches = matches_df
         print(f"Processing {len(valid_matches)} valid matches...")
         
         # Use iterrows but with progress indication
@@ -224,42 +216,33 @@ def create_player_profiles(elo_calculator: DartsELOCalculator, matches_df: pd.Da
     """Create comprehensive player profiles with statistics."""
     player_stats = {}
     
-    for player in elo_calculator.player_elos.keys():
-        player_matches = matches_df[
-            (matches_df['Player1'] == player) | (matches_df['Player2'] == player)
-        ].copy()
+    # Pre-calculate player matches using vectorized operations
+    all_players = list(elo_calculator.player_elos.keys())
+    
+    for player in tqdm(all_players, desc="Processing players"):
+        # Vectorized filtering
+        player_as_p1 = matches_df['Player1'] == player
+        player_as_p2 = matches_df['Player2'] == player
+        player_matches = matches_df[player_as_p1 | player_as_p2]
         
         if len(player_matches) == 0:
             continue
         
-        wins = 0
-        losses = 0
-        legs_won = 0
-        legs_lost = 0
-        tournaments_played = set()
+        # Vectorized calculations
+        is_player1 = player_matches['Player1'] == player
+        player_scores = np.where(is_player1, 
+                               player_matches['Player1Score'], 
+                               player_matches['Player2Score'])
+        opponent_scores = np.where(is_player1,
+                                 player_matches['Player2Score'],
+                                 player_matches['Player1Score'])
+        wins = np.where(is_player1,
+                       player_matches['Winner'] == player_matches['Player1'],
+                       player_matches['Winner'] == player_matches['Player2']).sum()
         
-        for _, match in player_matches.iterrows():
-            tournaments_played.add(match['Event'])
-            
-            if match['Player1'] == player:
-                player_score = match['Player1Score']
-                opponent_score = match['Player2Score']
-                if match['Winner'] == player:
-                    wins += 1
-                else:
-                    losses += 1
-            else:
-                player_score = match['Player2Score']
-                opponent_score = match['Player1Score']
-                if match['Winner'] == player:
-                    wins += 1
-                else:
-                    losses += 1
-            
-            if pd.notna(player_score):
-                legs_won += player_score
-            if pd.notna(opponent_score):
-                legs_lost += opponent_score
+        losses = len(player_matches) - wins
+        legs_won = player_scores.sum()
+        legs_lost = opponent_scores.sum()
         
         total_matches = wins + losses
         win_percentage = (wins / total_matches * 100) if total_matches > 0 else 0
@@ -274,7 +257,7 @@ def create_player_profiles(elo_calculator: DartsELOCalculator, matches_df: pd.Da
             'legs_won': legs_won,
             'legs_lost': legs_lost,
             'legs_ratio': round(legs_ratio, 2),
-            'tournaments_played': len(tournaments_played),
+            'tournaments_played': player_matches['Event'].nunique(),
             'first_match': player_matches['EventDate'].min(),
             'last_match': player_matches['EventDate'].max()
         }
