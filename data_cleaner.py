@@ -8,6 +8,9 @@ from datetime import datetime
 class DartsDataCleaner:
     def __init__(self):
         self.cleaning_stats = {}
+        self.excluded_events = [
+            'Darts Results', 'World Grand Prix'
+        ]
     
     def load_all_data(self, csv_directory: str = '/Users/christopherharvey-hawes/Documents/Darts_Forecast/darts_results/', file_pattern: str = 'darts_results_*.csv') -> pd.DataFrame:
         """Load all yearly CSV files into a single DataFrame."""
@@ -48,6 +51,44 @@ class DartsDataCleaner:
         self.cleaning_stats['after_date_removal'] = len(cleaned_df)
         
         print(f"  Removed {removed_count} matches with missing dates")
+        return cleaned_df
+    
+    def remove_excluded_events(self, df: pd.DataFrame, excluded_events: list = None) -> pd.DataFrame:
+        """
+        Remove matches from excluded events.
+        
+        Args:
+            df: DataFrame containing match data
+            excluded_events: List of event names or keywords to exclude. If None, uses default list.
+        """
+        if excluded_events is None:
+            excluded_events = self.excluded_events
+        
+        initial_count = len(df)
+        
+        # Create a mask for events to exclude (case-insensitive)
+        exclusion_mask = pd.Series(False, index=df.index)
+        
+        for excluded_term in excluded_events:
+            # Check if event name contains any of the excluded terms
+            mask = df['Event'].str.lower().str.contains(excluded_term.lower(), na=False)
+            exclusion_mask = exclusion_mask | mask
+        
+        # Remove excluded events
+        cleaned_df = df[~exclusion_mask].copy()
+        
+        removed_count = initial_count - len(cleaned_df)
+        self.cleaning_stats['excluded_events_removed'] = removed_count
+        self.cleaning_stats['after_event_removal'] = len(cleaned_df)
+        
+        # Show what was removed
+        if removed_count > 0:
+            excluded_event_counts = df[exclusion_mask]['Event'].value_counts().head(10)
+            print(f"  Removed {removed_count} matches from excluded events")
+            print(f"  Top excluded events:")
+            for event, count in excluded_event_counts.items():
+                print(f"    - {event}: {count} matches")
+        
         return cleaned_df
     
     def remove_scoreless_draws(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -157,6 +198,8 @@ class DartsDataCleaner:
         print(f"  Removed {initial_count - len(cleaned_df)} duplicate matches")
         return cleaned_df
     
+
+    
     def validate_winners(self, df: pd.DataFrame) -> pd.DataFrame:
         """Ensure winner field matches the actual scores."""
         cleaned_df = df.copy()
@@ -245,6 +288,7 @@ class DartsDataCleaner:
         self.cleaning_stats['initial_count'] = len(df)
         
         # Apply cleaning steps
+        df = self.remove_excluded_events(df)
         df = self.remove_scoreless_draws(df)
         df = self.remove_invalid_scores(df)
         df = self.clean_player_names(df)
